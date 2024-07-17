@@ -22,43 +22,18 @@ def load_embeddings(json_path, npy_path):
 
 embeddings, metadata = load_embeddings('embeddings.json', 'embeddings.npy')
 
-collection_name_ivf = "embedding_ivf"
-
-# Check if collection exists
-if not Collection.exists(collection_name_ivf):
-    collection_ivf = Collection(name=collection_name_ivf)
+collection_name_ivf = "embedding_ivf_new"
 
 # Function to search using BM25
 def bm25_search(query, documents, k=10):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     tokenized_docs = [tokenizer.tokenize(doc) for doc in documents]
     bm25 = BM25Okapi(tokenized_docs)
-    query_tokens = tokenizer.tokenize(query)
+    query_tokens = nltk.word_tokenize(str(query).lower())  # Ensure query is a string
     doc_scores = bm25.get_scores(query_tokens)
     sorted_indices = np.argsort(doc_scores)[::-1]
     return sorted_indices[:k]
-
-# Function to get DPR embeddings
-def get_dpr_embeddings(texts):
-    context_encoder = DPRContextEncoder.from_pretrained('facebook/dpr-ctx_encoder-single-nq-base')
-    question_encoder = DPRQuestionEncoder.from_pretrained('facebook/dpr-question_encoder-single-nq-base')
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     
-    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
-    with torch.no_grad():
-        context_embeddings = context_encoder(**inputs)
-    return context_embeddings.last_hidden_state.mean(dim=1).numpy()
-
-# Search in Milvus
-def search_in_milvus(collection_name, query_embedding, top_k=10):
-    collection = Collection(collection_name)
-    search_params = {
-        "metric_type": "L2",
-        "params": {"nprobe": 10}
-    }
-    results = collection.search(query_embedding, "embedding", search_params, limit=top_k, output_fields=["url"])
-    return results
-
 # Query expansion using WordNet
 def expand_query(query):
     synonyms = set()
@@ -68,39 +43,6 @@ def expand_query(query):
                 synonyms.add(lemma.name())
     return list(synonyms)
 
-# Hybrid Retrieval Function
-def hybrid_retrieve(query, top_k=10):
-    
-    # Query expansion
-    expanded_query = " ".join(expand_query(query))
-    
-    # BM25 Search
-    bm25_docs = [doc['text'] for doc in metadata]
-    bm25_indices = bm25_search(expanded_query, bm25_docs, k=top_k)
-    bm25_results = [metadata[i] for i in bm25_indices]
-
-    # DPR Embedding Search
-    query_tokens = BertTokenizer.from_pretrained('bert-base-uncased').encode(expanded_query, return_tensors="pt")
-    with torch.no_grad():
-        query_embedding = DPRQuestionEncoder.from_pretrained('facebook/dpr-question_encoder-single-nq-base')(
-            input_ids=query_tokens
-        ).last_hidden_state.mean(dim=1).numpy()
-    
-    milvus_results = search_in_milvus(collection_name_ivf, query_embedding, top_k)
-    milvus_results = [doc for doc in milvus_results if doc['url'] not in [result['url'] for result in bm25_results]]
-    
-    # Combine results and re-rank
-    combined_results = bm25_results + milvus_results
-    combined_embeddings = [embedding for result in combined_results for embedding in result['embedding']]
-    similarities = cosine_similarity(query_embedding, combined_embeddings)[0]
-    
-    for i, result in enumerate(combined_results):
-        result['similarity'] = similarities[i]
-    
-    combined_results.sort(key=lambda x: x['similarity'], reverse=True)
-    
-    return combined_results[:top_k]
-
 # Question Answering Function
 def answer_question(question, context):
     qa_pipeline = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad", tokenizer="distilbert-base-uncased-distilled-squad")
@@ -108,17 +50,56 @@ def answer_question(question, context):
     answer = qa_pipeline(question=question, context=context)
     return answer['answer']
 
+# Function to search in Milvus
+def search_in_milvus(collection_name, query_embedding, top_k=10):
+    collection = Collection(name=collection_name)
+    search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+    results = collection.search(query_embedding, "embedding", search_params, limit=top_k)
+    return results
+
+# Hybrid Retrieval Function
+def hybrid_retrieve(query, top_k=10):
+    # Step 1: Query Expansion
+    expanded_query = expand_query(query)
+    
+    # Step 2: BM25 Search
+    # Converting vectors to strings
+    bm25_docs = [" ".join([str(num) for num in vec]) for vec in embeddings]  
+    bm25_indices = bm25_search(expanded_query, bm25_docs, k=top_k)
+    bm25_results = [embeddings[i] for i in bm25_indices]
+
+    # Step 3: DPR Embedding Search
+    tokenizer = BertTokenizer.from_pretrained('facebook/dpr-question_encoder-single-nq-base')
+    question_encoder = DPRQuestionEncoder.from_pretrained('facebook/dpr-question_encoder-single-nq-base')
+    query_inputs = tokenizer(expanded_query, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        query_embedding = question_encoder(**query_inputs).pooler_output.numpy()
+    
+    milvus_results = search_in_milvus(collection_name_ivf, query_embedding, top_k)
+    
+    # Step 4: Combine Results
+    combined_results = bm25_results + [result for result in milvus_results[0]]
+    
+    # Step 5: Re-rank Combined Results  
+    combined_embeddings = combined_results
+    
+    combined_embeddings = combined_embeddings[0].reshape(1, -1)
+    similarities = cosine_similarity(query_embedding, combined_embeddings)
+    
+    ranked_results = sorted(zip(combined_results, similarities), key=lambda x: x[1], reverse=True)
+    
+    return ranked_results[:top_k]
 
 # Example Query
 query = "What are the features of CUDA?"
 results = hybrid_retrieve(query, top_k=10)
 
 # Print results
-for i, result in enumerate(results):
-    print(f"Rank {i+1}: {result['url']} - Similarity Score: {result['similarity']}")
+for i, (embedding, similarity) in enumerate(results):
+    print(f"Rank {i+1}: Similarity Score: {similarity}")
 
 # Prepare context for question answering
-context = " ".join([result['text'] for result in results])
+context = " ".join([str(result) for result in results])
 
 # Get the answer from the question answering model
 answer = answer_question(query, context)

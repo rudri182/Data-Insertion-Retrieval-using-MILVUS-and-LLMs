@@ -46,7 +46,7 @@ def crawl(url, depth, max_depth):
 
 def main():
     parent_url = "https://docs.nvidia.com/cuda/"
-    max_depth = 5
+    max_depth = 4
     crawl(parent_url, 0, max_depth)
 
 if __name__ == "__main__":

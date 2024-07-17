@@ -12,6 +12,11 @@ from transformers import BertTokenizer, BertModel
 from gensim import corpora, models
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 
+# Connect to Milvus
+connections.connect("default", host="localhost", port="19530")
+utility.drop_collection("embedding_ivf_new")
+
+
 nltk.download('punkt')
 nltk.download('stopwords')
 
@@ -37,7 +42,7 @@ def preprocess_text(text):
         processed_sentences.append(' '.join(filtered_words))
     return processed_sentences
 
-# To gGenerate embeddings for each sentence
+# To generate embeddings for each sentence
 def get_bert_embeddings(sentences):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     model = BertModel.from_pretrained('bert-base-uncased')
@@ -67,35 +72,55 @@ def topic_modeling(chunks):
     for topic in topics:
         print(topic)
 
-def save_embeddings_to_milvus(embeddings, metadata, collection_name, index_params):
+
+def save_embeddings_to_milvus(embeddings, documents, urls, collection_name, index_params):
     connections.connect("default", host="localhost", port="19530")
 
     fields = [
-        FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=True, max_len=30),
+        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=768),
         FieldSchema(name="url", dtype=DataType.VARCHAR, max_length=500)
     ]
-
     schema = CollectionSchema(fields, description="Vector database for embeddings with metadata")
 
     if not utility.has_collection(collection_name):
         collection = Collection(name=collection_name, schema=schema)
     else:
         collection = Collection(name=collection_name)
-       
 
     data = [
-        # becuase auto_id is True, id is impliciltly given 
-        embeddings,                # Embedding vectors
-        metadata                   # Metadata URLs
+        # [i for i in range(len(embeddings))],  # IDs
+        embeddings,                  # Embedding vectors
+        # documents,                            # Text documents
+        urls                                  # Metadata URLs
     ]
-    
-
     collection.insert(data)
-    # to ensure that the collection is not loaded while the index is being created
-    collection.release()
+    collection.release()  # Release the collection before creating the index
     collection.create_index(field_name="embedding", index_params=index_params)
     collection.load()
+
+
+
+
+
+# def execute(directory, num_chunks=5):
+#     texts = load_text_data(directory)
+#     all_sentences = []
+#     for text in texts:
+#         all_sentences.extend(preprocess_text(text))
+    
+#     embeddings = get_bert_embeddings(all_sentences)
+#     chunks = chunk_sentences(all_sentences, embeddings, num_chunks)
+#     chunk_embeddings = get_bert_embeddings([" ".join(chunk) for chunk in chunks])
+#     topic_modeling(chunks)
+    
+#     metadata = [f"chunk_{i}_url" for i in range(len(chunk_embeddings))]
+
+    
+#     # Save with IVF index
+#     save_embeddings_to_milvus(chunk_embeddings, metadata, "embedding_ivf", {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 128}})
+
+#     return chunk_embeddings
 
 def execute(directory, num_chunks=5):
     texts = load_text_data(directory)
@@ -107,18 +132,25 @@ def execute(directory, num_chunks=5):
     chunks = chunk_sentences(all_sentences, embeddings, num_chunks)
     chunk_embeddings = get_bert_embeddings([" ".join(chunk) for chunk in chunks])
     topic_modeling(chunks)
-    
-    metadata = [f"chunk_{i}_url" for i in range(len(chunk_embeddings))]
 
+    print("Chunks:--------- ", chunks)
+    
+    documents = [" ".join(chunk) for chunk in chunks]
+    urls = [f"chunk_{i}_url" for i in range(len(chunk_embeddings))]
+
+    # # Save with FLAT index
+    # save_embeddings_to_milvus(chunk_embeddings, documents, urls, "embedding_flat", {"index_type": "FLAT", "metric_type": "L2", "params": {}})
     
     # Save with IVF index
-    save_embeddings_to_milvus(chunk_embeddings, metadata, "embedding_ivf", {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 128}})
+    save_embeddings_to_milvus(chunk_embeddings, documents, urls, "embedding_ivf_new", {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 128}})
 
     return chunk_embeddings
 
-for i in range(6):
+
+
+
+for i in range(5):
 
     directory = 'level_' + str(i)
     chunk_embeddings = execute(directory)
 
-# utility.drop_collection("embedding_ivf")

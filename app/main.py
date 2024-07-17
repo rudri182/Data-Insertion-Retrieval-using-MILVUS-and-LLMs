@@ -14,18 +14,20 @@ def main():
         if query:
             with st.spinner("Retrieving information..."):
                 results = hybrid_retrieve(query, top_k=10)
+                st.subheader("Similarity Scores:")
 
-                context = " ".join([result['text'] for result in results])
+                for i, (embedding, similarity) in enumerate(results):
+                    st.write(f"Rank {i+1}: Similarity Score: {similarity}")
+
+                # Prepare context for question answering
+                context = " ".join([str(result) for result in results])
+
+                # Get the answer from the question answering model
                 answer = answer_question(query, context)
-
+                
                 st.subheader("Answer:")
                 st.write(answer)
 
-                st.subheader("Retrieved Context:")
-                for i, result in enumerate(results):
-                    st.write(f"Rank {i + 1}: {result['url']} - Similarity Score: {result['similarity']}")
-                    st.write(result['text'])
-                    st.write("---")
         else:
             st.warning("Please enter a query.")
 

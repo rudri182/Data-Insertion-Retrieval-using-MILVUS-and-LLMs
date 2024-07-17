@@ -27,7 +27,7 @@ To run the code successfully in the system ensure the following requirements:
 
 ### Milvus Setup
 
-1. Follow the [Milvus installation guide](https://milvus.io/docs/v2.0.x/install_standalone-docker.md) and [How to Get Started with Milvus](https://milvus.io/blog/how-to-get-started-with-milvus.md) to set up Milvus.
+1. Follow the detailed instructions from [Milvus installation guide](https://milvus.io/docs/v2.0.x/install_standalone-docker.md) and [How to Get Started with Milvus](https://milvus.io/blog/how-to-get-started-with-milvus.md) to set up Milvus.
 - To run Milvus succesfully in the system ensure Docker is properly running in the system. 
 - To run Docker in windows, install _Docker Desktop_  and ensure that _Virtualization_ is enabled in the system. If it is not enabled in the system, then enable it from the BIOS settings.
 2. Ensure Milvus is running on `localhost` and the default port `19530`.
